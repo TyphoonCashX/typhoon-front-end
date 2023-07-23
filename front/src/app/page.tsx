@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import Header from "./components/Header";
-import { useAccount, useNetwork } from "wagmi";
+import { useAccount, useNetwork, useSwitchNetwork, useWalletClient } from "wagmi";
+import { waitForTransaction, getPublicClient } from "@wagmi/core";
 import { useConnectModal } from "@rainbow-me/rainbowkit";
 import { formatEther } from "viem";
 import {
@@ -39,14 +40,27 @@ import {
   AuthType,
   ClaimType,
   SismoConnectConfig,
+  SismoConnectResponse
 } from "@sismo-core/sismo-connect-react";
+import {
+  Chain,
+  GetContractReturnType,
+  PublicClient,
+  TransactionReceipt,
+  WalletClient,
+  getContract,
+} from "viem";
 import { AUTHS, CLAIMS, CONFIG } from "@/app/sismo-connect-config";
+import { useDepositContract } from "@/utils/typhoon/deposit";
+import { useWithdrawContract } from "@/utils/typhoon/withdraw";
+import { Address, encodePacked } from 'viem'
+import { Hash } from "phosphor-react";
+import { bridgeAmount } from "@/utils/typhoon/constants";
 
 /* ********************  Defines the chain to use *************************** */
 const CHAIN = mumbaiFork;
 
 export default function Home() {
-  const [pageState, setPageState] = useState<string>("init");
   const [sismoConnectVerifiedResult, setSismoConnectVerifiedResult] = useState<{
     verifiedClaims: VerifiedClaim[];
     verifiedAuths: VerifiedAuth[];
@@ -60,85 +74,173 @@ export default function Home() {
   });
   const { chain } = useNetwork();
   const { openConnectModal, connectModalOpen } = useConnectModal();
-  const { airdropContract, switchNetworkAsync, waitingForTransaction, error } = useContract({
-    responseBytes,
+
+  const { switchNetworkAsync } = useSwitchNetwork();
+
+  /* *****************************************************  Typhoon state ******************************************************** */
+
+  // Typhoon front
+
+  const [pageWithdrawState, setPageWithdrawState] = useState<string>("init");
+
+  const [bridgeState, setBridgeState] = useState<string>("withdraw")
+
+  const [depositApproved, setDepositApproved] = useState<boolean>(false)
+
+  const [gasFees, setGasFees] = useState<number>(0)
+
+  const [receiveAddress, setReceiveAddress] = useState<Address>('0xAbCd...')
+
+  const [vaultId, setVaultId] = useState<string>("")
+
+  /* *****************************************************  Typhoon functions ******************************************************** */
+
+  const { approveDeposit, depositAsset } = useDepositContract({
     chain: CHAIN,
+    user: address
   });
+
+  const { askRedeem, askWithdraw, waitingForTransaction } = useWithdrawContract({
+    chain: CHAIN,
+    bytes: responseBytes,
+    receiveAddress: receiveAddress, // !!!!!!!!!!!!!!!!!!!!!
+    gasFees: BigInt(gasFees),
+    vaultId: vaultId
+  })
+
+  async function startRedeem() {
+    try {
+      let hash = await askRedeem()
+      setPageWithdrawState("waitingRedeem")
+      console.log("Waiting...")
+      let wait = await new Promise(r => setTimeout(r, 2000));
+      console.log("Wait ended")
+      setPageWithdrawState("pendingWithdraw")
+    } catch (e: any) {
+      setClaimError(formatError(e));
+      setPageWithdrawState("pendingRedeem")
+    }
+  }
+
+  async function startWithdraw() {
+    try {
+      let hash = askWithdraw()
+      setPageWithdrawState("waitingWithdraw")
+      console.log("Waiting...")
+      let wait = await new Promise(r => setTimeout(r, 2000));
+      console.log("Wait ended")
+      setPageWithdrawState("withdrawComplete")
+    } catch (e: any) {
+      setClaimError(formatError(e));
+      setPageWithdrawState("pendingRedeem")
+    }
+  }
+
+  /* ***************************************************** */
 
   // Get the SismoConnectConfig and Sismo Connect Request from the contract
   // Set react state accordingly to display the Sismo Connect Button
 
   useEffect(() => {
-    setClaimError(error);
-    if (!responseBytes) return;
-    setPageState("responseReceived");
-  }, [responseBytes, error, claimError]);
-
-  /* *************************  Reset state **************************** */
-  function resetApp() {
-    setPageState("init");
-    setSismoConnectVerifiedResult(null);
-    setClaimError(null);
-    const url = new URL(window.location.href);
-    url.searchParams.delete("sismoConnectResponseCompressed");
-    window.history.replaceState({}, "", url.toString());
-    setResponseBytes("");
-  }
-
-  /* ************  Handle the airdrop claim button click ******************* */
-  async function claimAirdrop() {
-    if (!address) return;
-    setClaimError("");
-    try {
-      if (chain?.id !== CHAIN.id) await switchNetworkAsync?.(CHAIN.id);
-      setPageState("confirmingTransaction");
-      const hash = await airdropContract.write.claimWithSismo([responseBytes, address]);
-      setPageState("verifying");
-      let txReceipt = await waitingForTransaction(hash);
-      if (txReceipt?.status === "success") {
-        const sismoConnectVerifiedResult = getResults(
-          (await airdropContract.read.getSismoConnectVerifiedResult()) as [
-            VerifiedAuth[],
-            VerifiedClaim[],
-            string
-          ]
-        );
-        setSismoConnectVerifiedResult({
-          verifiedClaims: sismoConnectVerifiedResult.verifiedClaims,
-          verifiedAuths: sismoConnectVerifiedResult.verifiedAuths,
-          verifiedSignedMessage: sismoConnectVerifiedResult.verifiedSignedMessage,
-          amountClaimed: formatEther((await airdropContract.read.balanceOf([address])) as bigint),
-        });
-        setPageState("verified");
-      }
-    } catch (e: any) {
-      setClaimError(formatError(e));
-    } finally {
-      setPageState("responseReceived");
-    }
-  }
+    const gasFeesParam = localStorage.getItem("gasFees")
+    const receivingAddressParam = localStorage.getItem("receivingAddress")
+    console.log(gasFeesParam)
+    console.log(receivingAddressParam)
+    if (gasFeesParam === null) return;
+    if (receivingAddressParam === null) return;
+    setGasFees(parseInt(gasFeesParam))
+    setReceiveAddress(receivingAddressParam as Address)
+  })
 
   return (
     <>
       <main className="main">
-        <Header />
+        {/* <Header /> */}
         {!isConnected && (
           <button onClick={() => openConnectModal?.()} disabled={connectModalOpen}>
             {connectModalOpen ? "Connecting wallet..." : "Connect wallet"}
           </button>
         )}
-        {isConnected && (
+        {bridgeState == "deposit" && (
+          <>
+            {!depositApproved && (
+              <button onClick={() => {
+                approveDeposit();
+                setDepositApproved(true)
+              }
+              }>Approve deposit on bridge</button>
+            )}
+            {depositApproved && (
+              <button onClick={() => {
+                depositAsset();
+                setBridgeState("withdraw")
+              }
+              }>Bridge your token !</button>
+            )}
+          </>
+        )}
+        {bridgeState == "withdraw" && (
+          <>
+            {isConnected && (
           <>
             <>
               {" "}
-              {pageState != "init" && <button onClick={() => resetApp()}>Reset</button>}
               <p>
-                <b>{`Chain: ${chain?.name} [${chain?.id}]`}</b>
-                <br />
-                <b>Your airdrop destination address is: {address}</b>
+                <b>{`You are withdrawing on: ${chain?.name} [${chain?.id}]`}</b>
               </p>
             </>
-            {pageState == "init" && !claimError && (
+            {pageWithdrawState == "init" && (
+              <>
+              <input
+                defaultValue={"0"}
+                onChange={e => {
+                  let value = parseInt(e.target.value)
+                  if (isNaN(value)) {
+                    console.log("noooo" + " 0")
+                    setGasFees(0)
+                  } else {
+                    localStorage.setItem("gasFees", String(value))
+                    console.log(String(value))
+                    setGasFees(value)
+                  }
+                }}
+              />
+              <input
+                defaultValue={"0x..."}
+                onChange={e => {
+                  let add = e.target.value
+                  if (add.startsWith("0x") && add.length == 42) {
+                    localStorage.setItem("receivingAddress", add)
+                    console.log(add)
+                    setReceiveAddress(e.target.value as Address)
+                  }
+                }}
+              />
+              {gasFees == 0 && (
+                <>
+                  You need a valid gas fee !
+                  <br />
+                </>
+              )}
+              {receiveAddress.length != 42 && (
+                <>
+                  You need a valid receiving address !
+                  <br />
+                </>
+              )}
+              </>
+            )}
+            {pageWithdrawState == "pendingRedeem" && (
+              <>
+                Proof successfully generated !
+                <br />
+                Gas fees selected: {gasFees}
+                <br />
+                Receving address selected: {receiveAddress}
+                <br />
+              </>
+            )}
+            {!claimError && pageWithdrawState == "init" && (
               <>
                 <SismoConnectButton
                   config={CONFIG}
@@ -149,28 +251,59 @@ export default function Home() {
                   // When doing so Data Source is not shared to the app.
                   claims={CLAIMS}
                   // Signature = user can sign a message embedded in their zk proof
-                  signature={{ message: signMessage(address!) }}
+                  signature={{ message: encodePacked(
+                    ['address', 'uint256'],
+                    [address as Address, BigInt(gasFees)]
+                  )}}
                   // responseBytes = the response from Sismo Connect, will be sent onchain
                   onResponseBytes={(responseBytes: string) => {
+                    console.log(responseBytes)
                     setResponseBytes(responseBytes);
+                    setPageWithdrawState("pendingRedeem");
+                  }}
+                  onResponse={(response: SismoConnectResponse) => {
+                    console.log(response)
+                    let vaultId = response.proofs[0].auths![0].userId!
+                    console.log(vaultId)
+                    if (vaultId != undefined) {
+                      setVaultId(vaultId)
+                      localStorage.setItem("groupId", vaultId)
+                    }
                   }}
                   // Some text to display on the button
-                  text={"Claim with Sismo"}
+                  text={"Prove your right to bridge with Sismo !"}
                 />
               </>
             )}
-            {claimError !== null && (
+            {!claimError && (
               <div className="status-wrapper">
-                {pageState == "responseReceived" && (
-                  <button onClick={() => claimAirdrop()}>{"Claim"}</button>
+                {pageWithdrawState == "pendingRedeem" && (
+                  <button onClick={() => startRedeem() }>{"Redeem !"}</button>
                 )}
-                {pageState == "confirmingTransaction" && (
-                  <button disabled={true}>{"Confirm tx in wallet"}</button>
+                {pageWithdrawState == "waitingRedeem" && (
+                  <>
+                    Waiting for redeem validation...
+                    <br />
+                  </>
                 )}
-                {pageState == "verifying" && (
-                  <span className="verifying"> Verifying ZK Proofs onchain... </span>
+                {pageWithdrawState == "pendingWithdraw" && (
+                  <>
+                    You can now withdraw your tokens !
+                    <button onClick={() => startWithdraw() }>{"Withdraw !"}</button>
+                  </>
                 )}
-                {pageState == "verified" && <span className="verified"> ZK Proofs Verified! </span>}
+                {pageWithdrawState == "waitingWithdraw" && (
+                  <>
+                    Waiting for withdraw validation...
+                    <br />
+                  </>
+                )}
+                {pageWithdrawState == "withdrawComplete" && (
+                  <>
+                    Congratulations, you successfully withdrew {bridgeAmount} eth to XXXXXX !
+                    <br />
+                  </>
+                )}
               </div>
             )}
             {isConnected && !sismoConnectVerifiedResult?.amountClaimed && claimError && (
@@ -190,169 +323,18 @@ export default function Home() {
             )}
             {/* Table of the Sismo Connect requests and verified result */}
             {/* Table for Verified Auths */}
-            {sismoConnectVerifiedResult?.verifiedAuths && (
-              <>
-                <p>
-                  {sismoConnectVerifiedResult.amountClaimed} tokens were claimed in total on{" "}
-                  {address}.
-                </p>
-                <h3>Verified Auths</h3>
-                <table>
-                  <thead>
-                    <tr>
-                      <th>AuthType</th>
-                      <th>Verified UserId</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {sismoConnectVerifiedResult.verifiedAuths.map((auth, index) => (
-                      <tr key={index}>
-                        <td>{AuthType[auth.authType]}</td>
-                        <td>
-                          {getUserIdFromHex(
-                            "0x" + (auth.userId! as unknown as number).toString(16)
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </>
+          </>
             )}
-            <br />
-            {/* Table for Verified Claims */}
-            {sismoConnectVerifiedResult?.verifiedClaims && (
-              <>
-                <h3>Verified Claims</h3>
-                <table>
-                  <thead>
-                    <tr>
-                      <th>groupId</th>
-                      <th>ClaimType</th>
-                      <th>Verified Value</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {sismoConnectVerifiedResult.verifiedClaims.map((claim, index) => (
-                      <tr key={index}>
-                        <td>
-                          <a
-                            target="_blank"
-                            href={
-                              "https://factory.sismo.io/groups-explorer?search=" + claim.groupId
-                            }
-                          >
-                            {claim.groupId}
-                          </a>
-                        </td>
-                        <td>{ClaimType[claim.claimType!]}</td>
-                        <td>{claim.value!.toString()}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </>
-            )}
-            {/* Table of the Auths requests*/}
-            <h3>Auths requested</h3>
-            <table>
-              <thead>
-                <tr>
-                  <th>AuthType</th>
-                  <th>Requested UserId</th>
-                  <th>Optional?</th>
-                  <th>ZK proof</th>
-                </tr>
-              </thead>
-              <tbody>
-                {AUTHS.map((auth, index) => (
-                  <tr key={index}>
-                    <td>{AuthType[auth.authType]}</td>
-                    <td>{auth.userId || "No userId requested"}</td>
-                    <td>{auth.isOptional ? "optional" : "required"}</td>
-                    {sismoConnectVerifiedResult?.verifiedAuths ? (
-                      <td>
-                        {getProofDataForAuth(
-                          sismoConnectVerifiedResult?.verifiedAuths,
-                          auth.authType
-                        )!.toString()}
-                      </td>
-                    ) : (
-                      <td> ZK proof not generated yet </td>
-                    )}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <br />
-            {/* Table of the Claims requests  and their results */}
-            <h3>Claims requested</h3>
-            <table>
-              <thead>
-                <tr>
-                  <th>GroupId</th>
-                  <th>ClaimType</th>
-                  <th>Requested Value</th>
-                  <th>Can User Select Value?</th>
-                  <th>Optional?</th>
-                  <th>ZK proof</th>
-                </tr>
-              </thead>
-              <tbody>
-                {CLAIMS.map((claim, index) => (
-                  <tr key={index}>
-                    <td>
-                      <a
-                        target="_blank"
-                        href={"https://factory.sismo.io/groups-explorer?search=" + claim.groupId}
-                      >
-                        {claim.groupId}
-                      </a>
-                    </td>
-                    <td>{ClaimType[claim.claimType || 0]}</td>
-                    <td>{claim.value ? claim.value : "1"}</td>
-                    <td>{claim.isSelectableByUser ? "yes" : "no"}</td>
-                    <td>{claim.isOptional ? "optional" : "required"}</td>
-                    {sismoConnectVerifiedResult?.verifiedClaims ? (
-                      <td>
-                        {
-                          getProofDataForClaim(
-                            sismoConnectVerifiedResult.verifiedClaims!,
-                            claim.claimType || 0,
-                            claim.groupId!,
-                            claim.value || 1
-                          )!
-                        }
-                      </td>
-                    ) : (
-                      <td> ZK proof not generated yet </td>
-                    )}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {/* Table of the Signature request and its result */}
-            <h3>Signature requested and verified</h3>
-            <table>
-              <thead>
-                <tr>
-                  <th>Message Requested</th>
-                  <th>Verified Signed Message</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td>{{ message: signMessage(address!) }.message}</td>
-                  <td>
-                    {sismoConnectVerifiedResult?.verifiedSignedMessage
-                      ? sismoConnectVerifiedResult.verifiedSignedMessage
-                      : "ZK Proof not verified"}
-                  </td>
-                </tr>
-              </tbody>
-            </table>
           </>
         )}
+        <button onClick={() => {
+          localStorage.clear()
+          window.location.replace('http://localhost:3000');
+          // setPageWithdrawState("init")
+          // setGasFees(0)
+          // setReceiveAddress("0xABCD")
+          // setVaultId("")
+          }}>Clear operation</button>
       </main>
     </>
   );
