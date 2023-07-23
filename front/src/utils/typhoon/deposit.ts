@@ -9,15 +9,26 @@ import { useAccount, useNetwork, useWalletClient } from "wagmi";
 import { getPublicClient } from "@wagmi/core";
 import { fundMyAccountOnLocalFork } from ".././fundMyAccountOnLocalFork";
 
-import { erc20Address, enterContractAddress, bridgeAmount } from "./constants"
+import { erc20Address, enterContractAddressMunbai, enterContractAddressGnosis, bridgeAmount } from "./constants"
 
 import { erc20ABI } from "./ABI/ERC20";
 import { entryNodeABI } from "./ABI/EntryNode"
 
+function getEnterContractAddress(chainName: string): Address {
+  if (chainName == "gnosis") {
+    return enterContractAddressGnosis as Address;
+  } else if (chainName == "mumbai") {
+    return enterContractAddressMunbai as Address;
+  }
+  return enterContractAddressGnosis as Address;
+}
+
 export function useDepositContract({
+    chainName,
     chain,
     user
   }: {
+    chainName: string;
     chain: Chain;
     user: Address | undefined
   }) : {
@@ -41,7 +52,7 @@ export function useDepositContract({
   });
 
   const depositContract = getContract({
-    address: enterContractAddress as `0x${string}`,
+    address: getEnterContractAddress(chainName),
     abi: [...entryNodeABI],
     publicClient,
     walletClient: walletClient as WalletClient,

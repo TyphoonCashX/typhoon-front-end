@@ -6,6 +6,7 @@ import { useAccount, useNetwork, useSwitchNetwork, useWalletClient } from "wagmi
 import { waitForTransaction, getPublicClient } from "@wagmi/core";
 import { useConnectModal } from "@rainbow-me/rainbowkit";
 import { formatEther } from "viem";
+import { AUTHS, CLAIMS, CONFIG_GNOSIS, CONFIG_MUMBAI } from "@/app/sismo-connect-config";
 import {
   formatError,
   getAuthRequestsAndClaimRequestsFromSismoConnectRequest,
@@ -50,12 +51,11 @@ import {
   WalletClient,
   getContract,
 } from "viem";
-import { AUTHS, CLAIMS, CONFIG } from "@/app/sismo-connect-config";
 import { useDepositContract } from "@/utils/typhoon/deposit";
 import { useWithdrawContract } from "@/utils/typhoon/withdraw";
 import { Address, encodePacked } from 'viem'
 import { Hash } from "phosphor-react";
-import { bridgeAmount } from "@/utils/typhoon/constants";
+import { LineaId, PolygonZkEVMId, bridgeAmount, goerliId, mantletestnetId, neondevnetId, sepoliaId, tenettestnetId } from "@/utils/typhoon/constants";
 
 /* ********************  Defines the chain to use *************************** */
 const CHAIN = mumbaiFork;
@@ -77,33 +77,40 @@ export default function Home() {
 
   const { switchNetworkAsync } = useSwitchNetwork();
 
+  const portalHeight = 500
+  const portalWidth = 0.4 * portalHeight
+
   /* *****************************************************  Typhoon state ******************************************************** */
 
   // Typhoon front
 
   const [pageWithdrawState, setPageWithdrawState] = useState<string>("init");
+  
+  const [pageDepositState, setPageDepositState] = useState<string>("init");
 
-  const [bridgeState, setBridgeState] = useState<string>("withdraw")
-
-  const [depositApproved, setDepositApproved] = useState<boolean>(false)
+  const [bridgeState, setBridgeState] = useState<string>("deposit")
 
   const [gasFees, setGasFees] = useState<number>(0)
 
-  const [receiveAddress, setReceiveAddress] = useState<Address>('0xAbCd...')
+  const [receiveAddress, setReceiveAddress] = useState<Address>('0x...')
 
   const [vaultId, setVaultId] = useState<string>("")
+
+  const [chainSelected, setChainSelected] = useState("gnosis")
 
   /* *****************************************************  Typhoon functions ******************************************************** */
 
   const { approveDeposit, depositAsset } = useDepositContract({
+    chainName: chainSelected,
     chain: CHAIN,
     user: address
   });
 
   const { askRedeem, askWithdraw, waitingForTransaction } = useWithdrawContract({
+    chainName: chainSelected,
     chain: CHAIN,
     bytes: responseBytes,
-    receiveAddress: receiveAddress, // !!!!!!!!!!!!!!!!!!!!!
+    receiveAddress: receiveAddress,
     gasFees: BigInt(gasFees),
     vaultId: vaultId
   })
@@ -127,13 +134,67 @@ export default function Home() {
       let hash = askWithdraw()
       setPageWithdrawState("waitingWithdraw")
       console.log("Waiting...")
-      let wait = await new Promise(r => setTimeout(r, 2000));
+      await new Promise(r => setTimeout(r, 3500));
       console.log("Wait ended")
       setPageWithdrawState("withdrawComplete")
     } catch (e: any) {
       setClaimError(formatError(e));
       setPageWithdrawState("pendingRedeem")
     }
+  }
+
+  function getConfig(): SismoConnectConfig {
+    if (chainSelected == "gnosis") {
+      return CONFIG_GNOSIS;
+    } else if (chainSelected == "mumbai") {
+      return CONFIG_MUMBAI;
+    }
+    return CONFIG_GNOSIS;
+  }
+
+  function getLogoPath(): string {
+    let path = "/logos/" + chainSelected + ".png"
+    console.log(path)
+    return path
+  }
+
+  function getButtonColorClass(of: string): string {
+    if (of == bridgeState) {
+      if (of == "deposit") {
+        return "orangeFont"
+      } else {
+        return "blueFont"
+      }
+    }
+    return ""
+  }
+
+  function getNameColorClass(of: string): string {
+    if (of == chainSelected) {
+      if (bridgeState == "deposit") {
+        return "orangeFont"
+      }
+      return "blueFont"
+    }
+    return ""
+  }
+
+  async function startApproveDeposit() {
+    await approveDeposit();
+    setPageDepositState("waitingApproval")
+    console.log("Waiting...")
+    await new Promise(r => setTimeout(r, 3000));
+    console.log("Wait ended")
+    setPageDepositState("approved")
+  }
+  
+  async function startDeposit() {
+    await depositAsset();
+    setPageDepositState("waitingDeposit")
+    console.log("Waiting...")
+    await new Promise(r => setTimeout(r, 4000));
+    console.log("Wait ended")
+    setPageDepositState("deposited")
   }
 
   /* ***************************************************** */
@@ -144,39 +205,120 @@ export default function Home() {
   useEffect(() => {
     const gasFeesParam = localStorage.getItem("gasFees")
     const receivingAddressParam = localStorage.getItem("receivingAddress")
+    const bridgeStateParam = localStorage.getItem("bridgeState")
     console.log(gasFeesParam)
     console.log(receivingAddressParam)
+    console.log(bridgeStateParam);
     if (gasFeesParam === null) return;
     if (receivingAddressParam === null) return;
+    if (bridgeStateParam === null) return;
     setGasFees(parseInt(gasFeesParam))
     setReceiveAddress(receivingAddressParam as Address)
+    setBridgeState(bridgeStateParam)
   })
 
   return (
     <>
       <main className="main">
-        {/* <Header /> */}
+        <div className="portalFrame">
+          <img className="moveimageLeft" src={"/logos/Portal_left.png"} alt="Logo" width={portalWidth} height={portalHeight}/>
+          <div className="centeredDiv">
+            {/* <Header /> */}
         {!isConnected && (
           <button onClick={() => openConnectModal?.()} disabled={connectModalOpen}>
             {connectModalOpen ? "Connecting wallet..." : "Connect wallet"}
           </button>
         )}
+        {(
+          <div className="status-wrapper">
+            <button className={getButtonColorClass("deposit")} onClick={() => {
+              setBridgeState("deposit")
+              localStorage.setItem("bridgeState", "deposit")
+              }}>Deposit</button>
+            <img src={getLogoPath()} alt="Logo" width={100} height={100}/>
+            <button className={getButtonColorClass("withdraw")} onClick={() => {
+              setBridgeState("withdraw")
+              localStorage.setItem("bridgeState", "withdraw")
+          }}>Withdraw</button>
+          </div>
+        )}
+        {(
+          <div className="status-wrapper">
+            <button className={getNameColorClass("gnosis")} onClick={() => {
+              switchNetworkAsync?.(100)
+              setChainSelected("gnosis")
+              }}>Gnosis</button>
+            <button className={getNameColorClass("mumbai")} onClick={() => {
+              switchNetworkAsync?.(80001)
+              setChainSelected("mumbai")
+              }}>Mumbai</button>
+            <button className={getNameColorClass("sepolia")} onClick={() => {
+              switchNetworkAsync?.(sepoliaId)
+              setChainSelected("sepolia")
+              }}>Sepolia</button>
+            <button className={getNameColorClass("neon")} onClick={() => {
+              switchNetworkAsync?.(neondevnetId)
+              setChainSelected("neon")
+              }}>Noeon</button>
+            <button className={getNameColorClass("mantle")} onClick={() => {
+              switchNetworkAsync?.(mantletestnetId)
+              setChainSelected("mantle")
+              }}>Mantle</button>
+            <button className={getNameColorClass("tenet")} onClick={() => {
+              switchNetworkAsync?.(tenettestnetId)
+              setChainSelected("tenet")
+              }}>Tenet</button>
+            <button className={getNameColorClass("goerli")} onClick={() => {
+              switchNetworkAsync?.(goerliId)
+              setChainSelected("goerli")
+              }}>Goerli</button>
+            <button className={getNameColorClass("polygonZkEVM")} onClick={() => {
+              switchNetworkAsync?.(PolygonZkEVMId)
+              setChainSelected("polygonZkEVM")
+              }}>PolygonZkEVM</button>
+            <button className={getNameColorClass("Linea")} onClick={() => {
+              switchNetworkAsync?.(LineaId)
+              setChainSelected("Linea")
+              }}>Linea</button>
+          </div>
+        )}
         {bridgeState == "deposit" && (
           <>
-            {!depositApproved && (
-              <button onClick={() => {
-                approveDeposit();
-                setDepositApproved(true)
+          <>
+              {" "}
+              <p>
+                <b>{`You are depositing on: ${chain?.name} [${chain?.id}]`}</b>
+              </p>
+            </>
+            {pageDepositState === "init" && (
+              <button className="orangeFont" onClick={() => {
+                startApproveDeposit()
               }
               }>Approve deposit on bridge</button>
             )}
-            {depositApproved && (
-              <button onClick={() => {
-                depositAsset();
-                setBridgeState("withdraw")
+            {pageDepositState == "waitingApproval" && (
+              <p>Waiting for approval...</p>
+            )}
+            {pageDepositState == "waitingDeposit" && (
+              <p>Waiting for approval...</p>
+            )}
+            {pageDepositState == "deposited" && (
+              <p>Well done, you deposited {bridgeAmount / (10**18)} tokens on the bridge !</p>
+            )}
+            {pageDepositState == "approved" && (
+              <button className="orangeFont" onClick={() => {
+                startDeposit()
               }
               }>Bridge your token !</button>
             )}
+            <br />
+            <br />
+            <br />
+            <br />
+            <br />
+            <br />
+            <br />
+            <br />
           </>
         )}
         {bridgeState == "withdraw" && (
@@ -192,6 +334,7 @@ export default function Home() {
             {pageWithdrawState == "init" && (
               <>
               <input
+                className="blueFont"
                 defaultValue={"0"}
                 onChange={e => {
                   let value = parseInt(e.target.value)
@@ -206,6 +349,7 @@ export default function Home() {
                 }}
               />
               <input
+                className="blueFont"
                 defaultValue={"0x..."}
                 onChange={e => {
                   let add = e.target.value
@@ -243,7 +387,7 @@ export default function Home() {
             {!claimError && pageWithdrawState == "init" && (
               <>
                 <SismoConnectButton
-                  config={CONFIG}
+                  config={getConfig()}
                   // Auths = Data Source Ownership Requests
                   auths={AUTHS}
                   // Claims = prove groump membership of a Data Source in a specific Data Group.
@@ -276,7 +420,7 @@ export default function Home() {
               </>
             )}
             {!claimError && (
-              <div className="status-wrapper">
+              <>
                 {pageWithdrawState == "pendingRedeem" && (
                   <button onClick={() => startRedeem() }>{"Redeem !"}</button>
                 )}
@@ -288,8 +432,8 @@ export default function Home() {
                 )}
                 {pageWithdrawState == "pendingWithdraw" && (
                   <>
-                    You can now withdraw your tokens !
-                    <button onClick={() => startWithdraw() }>{"Withdraw !"}</button>
+                    {<p>You can now withdraw your tokens !</p>}
+                    {<button onClick={() => startWithdraw() }>{"Withdraw !"}</button>}
                   </>
                 )}
                 {pageWithdrawState == "waitingWithdraw" && (
@@ -300,13 +444,13 @@ export default function Home() {
                 )}
                 {pageWithdrawState == "withdrawComplete" && (
                   <>
-                    Congratulations, you successfully withdrew {bridgeAmount} eth to XXXXXX !
+                    Congratulations, you successfully withdrew {bridgeAmount / (10**18)} eth to XXXXXX !
                     <br />
                   </>
                 )}
-              </div>
+                </>
             )}
-            {isConnected && !sismoConnectVerifiedResult?.amountClaimed && claimError && (
+            {/* {isConnected && !sismoConnectVerifiedResult?.amountClaimed && claimError && (
               <>
                 <p style={{ color: "#ff6347" }}>{claimError}</p>
                 {claimError.slice(0, 50) ===
@@ -320,7 +464,7 @@ export default function Home() {
                   <button onClick={() => switchNetworkAsync?.(CHAIN.id)}>Switch chain</button>
                 )}
               </>
-            )}
+            )} */}
             {/* Table of the Sismo Connect requests and verified result */}
             {/* Table for Verified Auths */}
           </>
@@ -335,6 +479,9 @@ export default function Home() {
           // setReceiveAddress("0xABCD")
           // setVaultId("")
           }}>Clear operation</button>
+          </div>
+          <img className="moveimageRight" src={"/logos/Portal_Right.png"} alt="Logo" width={portalWidth} height={portalHeight}/>
+        </div>
       </main>
     </>
   );

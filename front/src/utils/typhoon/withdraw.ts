@@ -11,18 +11,29 @@ import { useAccount, useNetwork, useWalletClient } from "wagmi";
 import { waitForTransaction, getPublicClient } from "@wagmi/core";
 import { fundMyAccountOnLocalFork } from ".././fundMyAccountOnLocalFork";
 
-import { exitContractAddress } from "./constants"
+import { exitContractAddressGnosis, exitContractAddressMunbai } from "./constants"
 
 import { exitABI } from "./ABI/ExitNode"
 import { time } from "console";
 
+function getExitContractAddress(chainName: string): Address {
+  if (chainName == "gnosis") {
+    return exitContractAddressGnosis as Address;
+  } else if (chainName == "mumbai") {
+    return exitContractAddressMunbai as Address;
+  }
+  return exitContractAddressGnosis as Address;
+}
+
 export function useWithdrawContract({
+    chainName,
     chain,
     bytes,
     receiveAddress,
     gasFees,
     vaultId,
   }: {
+    chainName: string;
     chain: Chain;
     bytes: string | null;
     receiveAddress: Address | undefined;
@@ -43,7 +54,7 @@ export function useWithdrawContract({
   });
 
   const exitContract = getContract({
-    address: exitContractAddress as Address,
+    address: getExitContractAddress(chainName),
     abi: [...exitABI],
     publicClient,
     walletClient: walletClient as WalletClient,

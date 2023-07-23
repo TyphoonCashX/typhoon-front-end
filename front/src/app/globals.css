@@ -201,3 +201,39 @@ input:focus {
     align-items: center;
     margin-bottom: 2rem;
 }
+
+.portalFrame {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.moveimageLeft
+{
+    position: relative;
+    left: -66px;
+}
+
+.moveimageRight
+{
+    position: relative;
+    right: -66px;
+}
+
+.centeredDiv
+{
+  display: flex;
+  flex-direction: column;  
+}
+
+.orangeFont
+{
+  color: rgba(238 115 46);
+  font-weight: bolder;
+}
+
+.blueFont
+{
+  color: rgba(75 174 234);
+  font-weight: bolder;
+}
